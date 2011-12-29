@@ -1,0 +1,1072 @@
+{------------------------------Script Info-------------------------------------|
+| ScriptName   = Fast Fighter                                                  |
+| Author       = Narcle                                                        |
+| Description  = Fights any monster, food eating and HP regen.                 |
+| Version      = 4.01                                                          |
+| Date         = 12/25/2011                                                    |
+|==============================================================================|
+|                               Instructions                                   |
+|==============================================================================|
+|                                                                              |
+|   Setup with Form: (Reccommended)                                            |
+|          1a. Read FAQ on first post of Fast Fighter thread.                  |
+|          1b. OR Hit play now the form is pretty easy to use.                 |
+|              Click 'Help' in Form if you don't know how to grab/set colors.  |
+|                                                                              |
+|   Setup with Declare Players:                                                |
+|          1. Make sure you use the Color picker and select 3 colors           |
+|               from monster, and place them accordingly in DeclarePlayers.    |
+|          2. Setup players in DeclarePlayers                                  |
+|          3. Setup RuneScape (unless your using SMART)                        |
+|          4. Push play!                                                       |
+|                                                                              |
+|                                                                              |
+|______________________________________________________________________________}
+{$i SRL/SRL/misc/smart.scar}
+{$i SRL/SRL.scar}
+{$i SRL/SRL/skill/fighting.scar}
+{$i SRL/SRL/skill/ranging.scar}
+{$i SRL/SRL/misc/Reports.scar}
+{$i SRL/SRL/misc/stats.simba}
+{$i srl/srl/misc/paintsmart.scar}
+{------------------------------------------------------------------------------}
+{===============================Player Setup===================================}
+{------------------------------------------------------------------------------}
+Const
+  LogoutIn     = 29;    //Logout every ?? Minutes; +/- 3 minutes for randomness
+  LogToFile    = False; //File logging (helps me debug your problem) stores in /Scripts
+  DebugMode    = False; //Debug mode
+
+{   ATTENTION!!!
+  To use Forms just push play do NOT put anything in DeclarePlayers.
+  If you want to use DeclarePlayers fill it in (Forms should NOT come up then) }
+
+procedure DeclarePlayers;
+begin
+  With Players[0] do
+  begin
+    Name := ''; //Character Name
+    Pass := ''; //Character Pass
+    Active := True; //True if you want this player to be ran in the script, false if not
+    Strings[0] := '';//monster name
+    Strings[1] := '';//Fight style (str, att, def, crush etc. anything in your weapon info}
+    Integers[0] := 0;//1st color of monster
+    Integers[1] := 0;//2nd color of monster
+    Integers[2] := 0;//3rd color of monster
+    Arrays[0] := [3, false, false];
+              //[NPC Color Tolerance, Left click only, Right click only]
+  end;
+    
+  {
+  With Players[1] do  //copy and change number accordingly to add players
+  begin
+    Name :='';
+    Pass :='';
+    Active := True;
+    Strings[0] := '';//monster name
+    Strings[1] := '';//Fight Style
+    Integers[0] := 0;//1st color of monster
+    Integers[1] := 0;//2nd color of monster
+    Integers[2] := 0;//3rd color of monster
+    Arrays[0] := [3, false, false];
+          //[NPC Color Tolerance, Left click only, Right click only]
+  end;
+  }
+end;
+
+{------------------------------------------------------------------------------}
+{===========Don't edit below this unless you know what your doing!=============}
+{------------------------------------------------------------------------------}
+Type
+  FUsers = Record
+    Range, Melee, Setup, OutOfFood, TPAFight: Boolean;
+    MobName: string;
+    NPCTol, Clicktype: integer;
+    Colors: array of integer;
+    Weapon: array of TStringArray;
+  end;
+
+Const
+  Version    = '4.02';
+  ScriptName = 'Fast Fighter';
+  WeaponTime = 2750;//If weapon is faster lower it. (min 1200)
+  TOTALNPCKILLS = 10;
+  FOODATE = 11;
+  NPCKILLS = 12;
+  KILLSperHour = 13;
+  XPGained = 14;
+  XPperHour = 15;
+  REPORTXP = 16;
+  SESSIONXP = 17;
+  LOGOUTIME = 19;
+  ATTACKTIME = 20;
+  STARTXP  = 21;
+
+var
+  NAF: array [0..99] of FUsers;
+  TOTALKILLS, TOTALXP: integer;//Counters
+  LeftClickFail: boolean;
+  DebugFile: integer;
+  DebugModeOn: Boolean;
+  ReportTime: integer;
+  PlayerBox, AniBox1, AniBox2: TBox;
+
+const
+  FilePath = AppPath + 'FastFighter4Chars.ini';
+var
+  frmDesign: TForm;
+  PButtons: Array [0..3] of TButton;
+  SButtons: Array of TButton;
+  frmLabels: Array of TLABEL;
+  frmEdits: Array of TEDIT;
+  CheckBoxs: Array [0..2] of TCHECKBOX;
+  CurPlayer: integer;
+  AKpf_SavePlayers, AKpf_Terminate: boolean;
+  Memo: TMemo;
+
+
+procedure Debug(S: String);
+begin
+  if LogToFile then
+  try
+    if (DebugFile <> -1) then
+      if (not WriteFileString(DebugFile, TheTime+' - '+S + #13+#10)) then
+        Writeln('Debug: Failed to write to file');
+  except
+    Writeln(ExceptionToString(ExceptionType, ExceptionParam));
+  end;
+  if DebugModeOn then
+    Writeln(S)
+  else
+    DebugLn(s);
+end;
+
+Procedure FormNotify(S: string);
+begin
+  Writeln(S);
+  Memo.LINES.Add(s);
+end;
+
+Procedure SavePlayers(tofile: boolean);
+var
+  i, ii: integer;
+begin
+  try
+  With Players[CurPlayer] do
+  begin
+    Name := frmEdits[0].Caption;
+    Pass := frmEdits[1].Caption;
+    Active := CheckBoxs[0].CHECKED;
+    Strings[0] := frmEdits[6].Caption;//npc name
+    Strings[1] := frmEdits[11].Caption;//fight style
+    for ii := 0 to 2 do
+      Integers[ii] := StrToInt( ReplaceWrap( (frmEdits[ii+7].Caption), ' ', '', [rfReplaceAll]));
+    Arrays[0] := [frmEdits[10].Caption, CheckBoxs[1].CHECKED, CheckBoxs[2].CHECKED];
+  end;
+  except
+    Writeln('Failed to save Player '+ToStr(CurPlayer)+'.');
+  end;
+
+  if tofile then
+  begin
+    WriteINI('General', 'NumOfPlayers', IntToStr(HowManyPlayers), FilePath);
+    WriteINI('General', 'statsUser', frmEdits[4].Caption, FilePath);
+    WriteINI('General', 'statsPass', frmEdits[5].Caption, FilePath);
+  end;
+
+  if tofile then
+  for i := 0 to HowManyPlayers - 1 do
+  with Players[i] do
+  begin
+    WriteINI('Player['+IntToStr(i)+']', 'Name', Name, FilePath);
+    WriteINI('Player['+IntToStr(i)+']', 'Pass', Pass, FilePath);
+    WriteINI('Player['+IntToStr(i)+']', 'Active', BoolToStr(Active), FilePath);
+    WriteINI('Player['+IntToStr(i)+']', 'Strings[0]', Strings[0], FilePath);
+    WriteINI('Player['+IntToStr(i)+']', 'Strings[1]', Strings[1], FilePath);
+    for ii := 0 to 2 do
+      WriteINI('Player['+IntToStr(i)+']', 'Integers['+IntToStr(ii)+']', IntToStr(Integers[ii]), FilePath);
+    WriteINI('Player['+IntToStr(i)+']', 'Arrays[0][0]', IntToStr(Arrays[0][0]), FilePath);
+    WriteINI('Player['+IntToStr(i)+']', 'Arrays[0][1]', BoolToStr(Arrays[0][1]), FilePath);
+    WriteINI('Player['+IntToStr(i)+']', 'Arrays[0][2]', BoolToStr(Arrays[0][2]), FilePath);
+  end;
+end;
+
+
+Procedure NewPlayer(index: integer);
+var
+  ii:integer;
+begin
+  with Players[Index] do
+  begin
+    Name := '';
+    Pass := '';
+    Active := true;
+    Strings[0] := '';
+    Strings[1] := '';
+    for ii := 0 to 2 do
+      Integers[ii] := 0;
+    Arrays[0] := [9, false, false];//Color Tolerance, right click, left click
+  end;
+end;
+
+Procedure ShowPlayer(index: integer);
+var
+  ii: integer;
+begin
+  if Players[index].Name = '' then
+    NewPlayer(Index);
+  With Players[index] do
+  begin
+    frmEdits[0].Caption := Name;
+    frmEdits[1].Caption := Pass;
+    CheckBoxs[0].CHECKED := Active;
+    frmEdits[6].Caption := Strings[0];
+    frmEdits[11].Caption := Strings[1];
+    for ii := 0 to 2 do
+      frmEdits[ii+7].Caption := IntToStr(Integers[ii]);
+    frmEdits[10].Caption := IntToStr(Arrays[0][0]);//npc tol
+    CheckBoxs[1].Checked := Arrays[0][1];//Right click
+    CheckBoxs[2].Checked := Arrays[0][2];//Left click
+  end;
+  CurPlayer := index;
+  frmEdits[4].Caption := stats_Username;
+  frmEdits[5].Caption := stats_UserPass;
+  frmEdits[2].Caption := IntToStr(CurPlayer);
+  frmEdits[3].Caption := IntToStr(HowManyPlayers);
+end;
+
+Procedure LoadPlayers;
+var
+  i,ii: integer;
+begin
+  HowManyPlayers := StrToIntDef(ReadINI('General', 'NumOfPlayers', FilePath), 1);
+  stats_Username := ReadINI('General', 'statsUser', FilePath);
+  stats_UserPass := ReadINI('General', 'statsPass', FilePath);
+  NumberOfPlayers(HowManyPlayers);
+  CurrentPlayer := 0;
+  CurPlayer := CurrentPlayer;
+  for i := 0 to HowManyPlayers - 1 do
+  with Players[i] do
+  begin
+    Name := ReadINI('Player['+IntToStr(i)+']', 'Name', FilePath);
+    Pass := ReadINI('Player['+IntToStr(i)+']', 'Pass', FilePath);
+    Active := StrToBool(ReadINI('Player['+IntToStr(i)+']', 'Active', FilePath));
+    Strings[0] := ReadINI('Player['+IntToStr(i)+']', 'Strings[0]', FilePath);
+    Strings[1] := ReadINI('Player['+IntToStr(i)+']', 'Strings[1]', FilePath);
+    for ii := 0 to 2 do
+      Integers[ii] := StrToInt(ReadINI('Player['+IntToStr(i)+']', 'Integers['+IntToStr(ii)+']', FilePath));
+    try
+      Arrays[0] := [StrToInt(ReadINI('Player['+IntToStr(i)+']', 'Arrays[0][0]', FilePath)),
+                    StrToBool(ReadINI('Player['+IntToStr(i)+']', 'Arrays[0][1]', FilePath)),
+                    StrToBool(ReadINI('Player['+IntToStr(i)+']', 'Arrays[0][2]', FilePath))];
+    except
+      Arrays[0] := [3, false, false];
+    end;
+  end;
+end;
+
+procedure OnLeftClick(Sender: TObject);
+begin
+  Case Sender of
+    SButtons[0]: begin//Start
+                   frmDesign.ModalResult := mrOk;
+                   AKpf_SavePlayers := False;
+                   AKpf_Terminate := False;
+                   Writeln('Start.');
+                 end;
+    SButtons[1]: begin//Save and start
+                   frmDesign.ModalResult := mrOk;
+                   AKpf_SavePlayers := True;
+                   AKpf_Terminate := False;
+                   Writeln('Save and Start.');
+                 end;
+    SButtons[2]: begin//Save and Exit
+                   frmDesign.MODALRESULT:= mrOk;
+                   AKpf_SavePlayers := True;
+                   AKpf_Terminate := True;
+                   Writeln('Save and Exit.');
+                 end;
+    SButtons[3]: begin//Exit
+                   frmDesign.MODALRESULT:= mrOk;
+                   AKpf_SavePlayers := False;
+                   AKpf_Terminate := True;
+                   Writeln('Exit.');
+                 end;
+    SButtons[4]: Memo.LINES.Clear;
+    SButtons[5]: Memo.LINES.Add(GetClipBoard);
+    SButtons[6]: OpenWebPage('http://villavu.com/forum/showthread.php?t=67793');
+
+    PButtons[0]: begin//Previous player
+                   SavePlayers(false);
+                   if CurPlayer = 0 then
+                     ShowPlayer(HowManyPlayers - 1)
+                   else
+                     ShowPlayer(CurPlayer - 1);
+                 end;
+    PButtons[1]: begin//New player
+                   Debugln('Trying to add new player.');
+                   Inc(HowManyPlayers);
+                   NumberOfPlayers(HowManyPlayers);
+                   CurPlayer := HowManyPlayers-1;
+                   ShowPlayer(CurPlayer);
+                   FormNotify('Player '+IntToStr(CurPlayer)+' added.');
+                 end;
+    PButtons[2]: begin//Next player
+                   SavePlayers(false);
+                   if CurPlayer = HowManyPlayers - 1 then
+                     ShowPlayer(0)
+                   else
+                     ShowPlayer(CurPlayer + 1);
+                 end;
+    PButtons[3]: begin//Delete player
+                   if (HowManyPlayers > 1) and (CurPlayer = 0) then
+                     FormNotify('Can''t delete player 0.')
+                   else
+                   if (HowManyPlayers = 1) then
+                   begin
+                     if not (MessageDlg('Delete?', 'Do you want to reset Player '+ToStr(CurPlayer)+'?', mtConfirmation, [mbYes,mbNo]) = mrYes) then
+                       Exit;
+                     NewPlayer(CurPlayer);
+                     FormNotify('Player '+ToStr(CurPlayer)+' reset.');
+                   end
+                   else
+                   if (MessageDlg('Delete?', 'Do you want to delete Player '+ToStr(CurPlayer)+'?', mtConfirmation, [mbYes,mbNo]) = mrYes) then
+                   begin
+                     FormNotify('Player '+ToStr(CurPlayer)+' deleted.');
+                     Swap(Players[CurPlayer], Players[HowManyPlayers - 1]);
+                     IncEx(HowManyPlayers, -1);
+                     ShowPlayer(Max(CurPlayer - 1, 0));
+                     SavePlayers(true);
+                   end;
+                 end;
+     CheckBoxs[1]: begin
+                     if CheckBoxs[2].CHECKED then
+                       CheckBoxs[2].CHECKED := false;
+                   end;
+     CheckBoxs[2]: begin
+                     if CheckBoxs[1].CHECKED then
+                       CheckBoxs[1].CHECKED := false;
+                   end;
+  end;
+end;
+
+procedure InitForm;
+var
+  i: integer;
+  PCaps, Labels, Hints: TStringArray;
+  Ws, Ls, Ts: TIntegerArray;
+begin
+  frmDesign := Tform.Create(nil);
+  With frmDesign do
+  begin
+    setBounds(100, 100, 600, 330);
+    Caption := ScriptName+' v'+Version+' by Narcle';
+    Color := ClWhite;
+    Font.Color := ClBlack;
+  end;
+
+
+  PCaps := ['Previous Player', 'New Player', 'Next Player', 'Delete Player'];
+  for i := 0 to 3 do
+  begin
+    PButtons[i] := TBUTTON.Create(frmDesign);
+    with PButtons[i] do
+    begin
+      Parent := frmDesign;
+      Height := 22;
+      if i = 3 then
+        Width := 80//Delete Player
+      else
+        Width := 120;
+      Left := 10+i*125;
+      Top := 8;
+      CAPTION := PCaps[i];
+      ONCLICK := @OnLeftClick;
+      if i = 3 then
+      begin
+        Left := 135;
+        Top := 34;
+      end;
+    end;
+  end;
+
+  PCaps := ['Start', 'Save and Start', 'Save and Exit', 'Exit', 'Clear', 'Paste', 'Help!'];
+  Hints := ['Clear the memo','Paste from clip board','Open help in default web browser.'];
+  SetArrayLength(SButtons, Length(PCaps));
+  for i := 0 to High(SButtons) do
+  begin
+    SButtons[i] := TBUTTON.Create(frmDesign);
+    with SButtons[i] do
+    begin
+      Parent := frmDesign;
+      Height := 22;
+      Width := 90;
+      Left := 6+i*96;
+      Top := 300;
+      FONT.Size := 8;
+      CAPTION := PCaps[i];
+      OnClick := @OnLeftClick;
+      if InIntArray([4,5,6],i) then
+      begin
+        Width := 50;
+        Left := 430+(i-4)*55;
+        ShowHint := true;
+        Hint := Hints[i-4];
+      end;
+    end;
+  end;
+
+
+
+  Labels := ['Username:', 'Password:', 'Active', 'Right click only', 'Left click only',
+            'SRL Stats User:', 'SRL Stats Password:', 'Player:', 'Total Players:',
+            'NPC Color 1:', 'NPC Color 2:', 'NPC Color 3:', 'NPC Name:','NPC Color Tolerance:', 'Fight Style:'];
+  Hints := ['Login name for the character you are using.','Login password','Will you be using this character?',
+            'Left click attack only', 'Right click attack only', 'SRL Stats goto stats.villavu.com to sign up!',
+            'SRL Stats goto stats.villavu.com to sign up!','','','Color of the NPC/Monster you''ll be fighting, use the color picker',
+            'Color of the NPC/Monster you''ll be fighting, use the color picker',
+            'Color of the NPC/Monster you''ll be fighting, use the color picker', 'Name of the NPC your fighting, check forums for details',
+            'Lower this number if the mouse hovers over other objects.', 'Read instructions on thread for more info'];
+  SetArrayLength(frmLabels, Length(Labels));
+  Ts := [62, 108,  186, 208, 230,  280, 280, 38,  38, 126, 156, 186, 62, 216, 160];
+  Ls := [10,  10,   30,  30,  30,   34, 198, 20, 260, 182, 182, 182, 200, 182, 10];
+  for i := 0 to High(Labels) do
+  begin
+    frmLabels[i] := TLABEL.Create(frmDesign);
+    with frmLabels[i] do
+    begin
+      Parent := frmDesign;
+      Height := 20;
+      Width := 50;
+      Top := Ts[i];
+      Left := Ls[i];
+      Font.Size := 8;
+      Caption := Labels[i];
+      if (Hints[i] <> '') then
+        Hint := Hints[i];
+      ShowHint := true;
+    end;
+  end;
+
+  Ws := [150, 150,  28,  28,  76,  76,  150, 100, 100, 100,  40,  80];
+  Ts := [ 80, 126,  34,  34, 274, 274,   80, 120, 150, 180, 210, 154];
+  Ls := [ 10,  10,  60, 330, 112, 300,  200, 250, 250, 250, 290,  80];
+  SetArrayLength(frmEdits, Length(Ws));
+  for i := 0 to High(frmEdits) do
+  begin
+    frmEdits[i] := TEDIT.Create(frmDesign);
+    with frmEdits[i] do
+    begin
+      Parent := frmDesign;
+      Height := 21;
+      Width := Ws[i];
+      top := Ts[i];
+      Left := Ls[i];
+      Font.Size := 8;
+    end;
+  end;
+
+  for i := 0 to High(CheckBoxs) do
+  begin
+    CheckBoxs[i] := TCHECKBOX.Create(frmDesign);
+    with CheckBoxs[i] do
+    begin
+      Parent := frmDesign;
+      Top := 184+i*22;
+      Left := 10;
+      ShowHint := true;
+      ONCLICK := @OnLeftClick;
+    end;
+  end;
+
+  Memo := TMemo.Create(frmDesign);
+  with Memo do
+  begin
+    Parent := frmDesign
+    Left := 390;
+    Top := 10;
+    Width := 200;
+    Height := 280;
+  end;
+
+  Memo.Lines.Add(ScriptName+' v'+Version+' by Narcle');
+  if FileExists(FilePath) then
+  begin
+    LoadPlayers;
+    ShowPlayer(0);
+  end
+  else
+  begin
+    HowManyPlayers := 1;
+    NumberOfPlayers(HowManyPlayers);
+    CurrentPlayer := 0;
+    CurPlayer := 0;
+    ShowPlayer(CurPlayer);
+  end;
+  frmDesign.ShowModal;
+end;
+
+procedure SafeInitForm;
+var
+  v: TVariantArray;
+begin
+  setarraylength(V, 0);
+  ThreadSafeCall('InitForm', v);
+end;
+
+procedure AntiBan;
+begin
+  if not LoggedIn then Exit;
+  case Random(99) of
+    0: wait(500+random(3000));
+    1: begin
+         RandomMovement;
+         SetAngle(true);
+       end;
+    3: PickUpMouse;
+  end;
+end;
+
+Function HpCheck: boolean;
+var
+  c, T, i:Integer;
+  RunDir: String;
+begin
+  if (HPPercent < 50) and LoggedIn then
+  begin
+    Result := True;
+    Debug('HP low doing HP checks...');
+    if not InvEmpty then
+      for c := 0 to 1 do
+      begin
+        if (c > 0) then//in case uptext fails
+          MakeCompass(rs_GetCompassAngleDegrees+60+random(50));
+        for i := 1 to 28 do //Begin food eating proc
+        if ExistsItem(i) then
+        begin
+          MMouseItem(i);
+          if WaitUpTextMulti(['Eat', 'obster', 'onkfish', 'hark'], 400) then
+          begin
+            ClickMouse2(False);
+            if WaitOption('Eat', 400) then
+            begin
+              Debug('Eating food...');
+              t := GetSystemTime;
+              while ExistsItem(i) and ((GetSystemTime-t) < 2000) do
+                wait(20);
+              if not ExistsItem(i) then
+                Inc(Players[CurrentPlayer].Integers[FOODATE]);
+              if (HPPercent > 60) then
+                Exit;
+            end;
+          end;
+        end;//End food eating
+      end;
+        if (not LoggedIn) or (HPPercent > 50) then
+          Exit;
+
+    if (HPPercent < 50) then
+    begin
+      if (HPPercent < 25) then
+        if (InFight) then
+        begin
+          RunDir := 'nsewns';
+          Debug('Running away HP% < 25...');
+          RunAway(RunDir[random(6)+1], true, 1, 10000 + random(2000));
+        end;
+      T := GetSystemTime;
+      repeat
+        if not IsResting then
+          SetRest;
+        Wait(200+random(200));
+        FindNormalRandoms;
+        If ((GetSystemTime - T) > (50000+random(50000)) ) then
+        begin
+          case random(2) of
+            0: BoredHuman;
+            1: RandomMovement;
+          end;
+          T := GetSystemTime;
+        end;
+        if not LoggedIn then
+          Exit;
+      until (HPPercent > 60);
+      SetAngle(true);
+    end;
+  end;
+end;
+
+procedure Report;
+var
+  xp,i: integer;
+begin
+  if not LoggedIn then
+    Exit;
+
+  with Players[CurrentPlayer] do
+  begin
+    IncEx(TOTALKILLS, Integers[NPCKILLS]);//Total Kills
+    stats_IncVariable('Monsters Killed', Integers[NPCKILLS]);
+
+    for i := 0 to 3 do
+      xp := Max(xp, GetXPBarTotal);
+    if (xp > Integers[REPORTXP]) then
+    begin
+      stats_IncVariable('Total EXP Gained', xp-Integers[REPORTXP]);
+      IncEx(Integers[XPGained], xp-Integers[REPORTXP]);
+      IncEx(TOTALXP, xp-Integers[REPORTXP]);
+      Integers[REPORTXP] := XP;
+    end;
+
+    if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
+      Integers[KILLSperHour] := round( (Integers[TOTALNPCKILLS]*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
+    else
+      Integers[KILLSperHour] := -1;
+
+    if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
+      Integers[XPperHour] := round( (Integers[XPGained]*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
+    else
+      Integers[XPperHour] := -1;
+
+    SRLProgressReport(ResultDebugBox, ScriptName, 'Narcle', Version,
+                          ['Time Ran','Killed', 'XP'],
+                          [MsToTime(GetTimeRunning, Time_Abbrev), TOTALKILLS, TOTALXP]);
+
+    SRLPlayerReport(ResultDebugBox, 0, False,
+                  [True, false, false, false, false, false],
+                  ['Kills', 'Kills/H', 'XP Gained', 'XP/H'],
+                  [], [TOTALNPCKILLS, KILLSperHour, XPGained, XPperHour], [], []);
+
+    Integers[NPCKILLS] := 0;
+  end;
+  ReportTime := GetSystemTime + 5*61000;
+  stats_Commit;
+end;
+
+procedure LogoutSeq(reason:string);
+begin
+  while InFight and LoggedIn do
+  begin
+    HpCheck;
+    wait(100);
+  end;
+  Debug('Logout sequence...');
+  if (reason = '') then
+  begin
+    if HowManyPlayers = 1 then
+    begin
+      LogOut;
+      Wait(RandomRange(1*60000, 3*60000));
+      NextPlayer(true);
+    end
+    else
+      NextPlayer(true);
+  end
+  else
+  begin
+    Writeln(reason+' '+Players[Currentplayer].Name+' is now inactive.');
+    NextPlayer(false);
+  end;
+end;
+
+procedure SitAndWait;//Super advance I know :P
+var
+  T: integer;
+begin
+  T := GetSystemTime + 30000;
+  Debug('No NPCs detected on screen, waiting...');
+  repeat
+    if not LoggedIn then
+      Exit;
+    Wait(50+random(50));
+    FindNormalRandoms;
+    AntiBan;
+    HpCheck;
+  until (GetSystemTime > T) or (Length(GetMMDotsOnMS('npc')) > 0);
+end;
+
+function ChangeCamera: boolean;
+var
+  i, II, PosNeg:integer;
+begin
+  Case random(2) of
+    0: PosNeg := 1;
+    1: PosNeg := -1;
+  end;
+  i := Round(rs_GetCompassAngleDegrees/45 - 1);
+  if i < 0 then i := 0;
+  if i > 7 then i := 7;
+  For II := 0 to 4+Random(4) do
+  begin
+    if (Length(GetMMDotsOnMS('npc')) > 0) then
+    begin
+      Result := true;
+      exit;
+    end;
+    i := i+PosNeg;
+    if i > 7 then i := 0;
+    if i < 0 then i := 7;
+    MakeCompass(inttostr(i*(40+random(6))));
+  end;
+end;
+
+procedure WaitFight;
+Var
+  T, C, s, x, y, i: integer;
+  P: TIntegerArray;
+begin
+  Debug('Waiting for Fight...');
+  //if DebugMode then
+  begin
+    //SMART_DrawBoxEx(False, AniBox1, clBlue);
+    SMART_DrawBoxEx(False, AniBox2, clPurple);
+  end;
+  for i := 0 to 2 do
+    s := Max(s, GetXPBarTotal);
+  y := s;
+  C := GetSystemTime;
+  T := Getsystemtime + 5000+Random(1000);
+  Repeat
+    P := PixelShiftMulti([AniBox1, AniBox2], 100);
+    if (P[1] > 190) or (GetSystemTime > T) then
+      Break;
+  until not LoggedIn;
+  if (GetSystemTime > T) or not LoggedIn then
+    Exit;
+  Debug('Killing monster...');
+  T := GetSystemTime + WeaponTime;
+  Repeat
+    P := PixelShiftMulti([AniBox1, AniBox2], 100);
+    if (P[1] > 190) or HpCheck then
+    begin
+      Debugln('Ani Time: '+Padl(ToStr(GetSystemTime-(T-WeaponTime)), 5)+' Ani Change: '+ToStr(P[0])+' + '+ToStr(P[1])+' = '+ToStr(P[0]+P[1]));
+      T := GetSystemTime + WeaponTime;
+    end;
+    FindNormalRandoms;
+    x := GetXPBarTotal;
+    if (x > y) then
+    begin
+      Debugln('Att speed: '+Tostr(GetSystemTime - C));
+      C := GetSystemTime;
+      y := x;
+    end;
+  until (GetSystemTime > T) or (not LoggedIn)
+  Debugln('Ani Time: '+Padl(ToStr(GetSystemTime-(T-WeaponTime)), 5));
+  Debug('Fighting Done.');
+  if ((x-s) > 12) then
+  begin
+    Inc(Players[CurrentPlayer].Integers[TOTALNPCKILLS]);
+    Inc(Players[CurrentPlayer].Integers[NPCKILLS]);
+  end;
+end;
+
+Function FightIt: Boolean;
+var
+  i, ii, r, L, P: integer;
+  T: TPoint;
+  NPCs: TPointArray;
+  BoxArr: TBoxArray;
+begin
+  P := GetSystemTime;
+  NPCs := GetMMDotsOnMS('npc');
+  L := Length(NPCs);
+  if L < 1 then
+    Exit;
+  SetLength(BoxArr, L);
+  for i := 0 to L-1 do
+  begin
+    T := MMtoMS(NPCs[i]);
+    BoxArr[i] := IntToBox(Max(T.x-40, MSX1), Max(T.y-40, MSY1), Min(T.x+40, MSX2), Min(T.y+40, MSY2));
+  end;
+
+  With NAF[CurrentPlayer] do
+  For ii := 0 to High(Colors) do //Color array
+    for i := 0 to L-1 do
+    with BoxArr[i] do
+    begin
+      T := MiddleBox(BoxArr[i]);
+      if FindColorSpiralTolerance(T.x, T.y, NAF[CurrentPlayer].Colors[ii], X1, Y1, X2, Y2, NAF[CurrentPlayer].NPCTol) then
+      begin
+        if PointInBox(T, PlayerBox) or IsFightAt(T.x, T.y) then
+          Continue;
+
+        SMART_DrawBoxEx(False, BoxArr[i], clRed);
+        MMouse(T.x, T.y, 3, 3);
+        if WaitUpTextMulti([NAF[CurrentPlayer].MobName], 150+random(100)) then//Text array
+        begin
+          Case ClickType of
+            0: r := Random(3);
+            1: r := 1;
+            2: r := 2;
+          end;
+          if (ClickType = 0) then
+            if LeftClickFail then
+              r := 2;
+          case r of
+            0..1: begin
+                    ClickMouse2(True);
+                    Result := DidClick(True, 100);
+                  end;
+               2: begin
+                    ClickMouse2(False);
+                    Result := ChooseOption('ttack');
+                  end;
+          end;
+          LeftClickFail := not result;
+          if Result then
+          begin
+            Debug('Attacked '+Inttostr(GetsystemTime - P)+'ms');
+            MarkTime(Players[CurrentPlayer].Integers[ATTACKTIME]);
+            FFlag(0);
+            Exit;
+          end Else Continue;
+        end;
+      end;
+    end;
+end;
+
+Procedure SMARTDrawDisplay;
+var
+  SArr: TStringArray;
+  xp, i: integer;
+begin
+  With Players[CurrentPlayer] do
+  begin
+    xp := GetXPBarTotal;
+    if (xp > Integers[STARTXP]) then
+      xp := (xp-Integers[STARTXP])
+    else
+      Exit;
+
+    if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
+      Integers[KILLSperHour] := round( (Integers[TOTALNPCKILLS]*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
+    else
+      Integers[KILLSperHour] := -1;
+
+    if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
+      Integers[XPperHour] := round( (xp*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
+    else
+      Integers[XPperHour] := -1;
+
+    SArr := [ ' Kills: '+ToStr(Integers[TOTALNPCKILLS]),
+              '  K/H: '+ToStr(Integers[KILLSperHour]),
+              '    XP: '+ToStr(XP),
+              'XP/H: '+ToStr(Integers[XPperHour])];
+
+  end;
+
+  for i := 0 to High(SArr) do
+    SMART_DrawTextEx((i < 1), 8, 290+11*i, StatChars, SArr[i], clYellow);
+end;
+
+procedure SetupPlayer;
+var
+  ammo, i: integer;
+begin
+  if not LoggedIn then
+    Exit;
+  MouseSpeed := RandomRange(15, 17);
+
+  ToggleXPBar(True);
+  for i := 0 to 3 do//4x check
+    Players[CurrentPlayer].Integers[SESSIONXP] := Max(GetXPBarTotal, Players[CurrentPlayer].Integers[SESSIONXP]);
+  Players[CurrentPlayer].Integers[REPORTXP] := Players[CurrentPlayer].Integers[SESSIONXP];
+  if not NAF[CurrentPlayer].Setup then
+  begin
+    Players[CurrentPlayer].Integers[STARTXP] := Players[CurrentPlayer].Integers[SESSIONXP];
+    Debug('Setting Angle');
+    SetAngle(true);
+    SetAngle(true);//just in case of lag
+    Debug('Setting Retaliate');
+    Retaliate(True);
+    Debug('Getting Weapon Info');
+
+    GetWeaponData(NAF[CurrentPlayer].Weapon);
+    if (Players[CurrentPlayer].Strings[1] <> '') then
+      if SetWeaponMode(Players[CurrentPlayer].Strings[1], NAF[CurrentPlayer].Weapon, True) then
+        Debug('Weapon set');
+    NAF[CurrentPlayer].Range := SetWeaponMode('ange', NAF[CurrentPlayer].Weapon, false);
+    NAF[CurrentPlayer].Melee := SetWeaponMode('ttack', NAF[CurrentPlayer].Weapon, false);
+    Debug('Getting Levels');
+    GetAllLevels;
+    If NAF[CurrentPlayer].Range then
+      Writeln(Capitalize(Players[CurrentPlayer].Name)+ ' is Ranging.');
+    if NAF[CurrentPlayer].Melee then
+      Writeln(Capitalize(Players[CurrentPlayer].Name)+ ' is Meleeing.');
+    if not (NAF[CurrentPlayer].Range or NAF[CurrentPlayer].Melee) then
+      Writeln('[WARNING] Failed to get weapon data. Can''t detect if ranging or meleeing.');
+    NAF[CurrentPlayer].Setup := true;
+  end;
+
+  if NAF[CurrentPlayer].Range then
+  begin
+    GameTab(tab_Equip);
+    ammo := ArrowAmount;
+    Debug('Ammo left: '+IntToStr(ammo));
+    if (ammo < 200) then
+      LogoutSeq('Low Ammo');
+  end;
+
+  SetRun(True);
+
+  Players[CurrentPlayer].Integers[LOGOUTIME] := Getsystemtime + RandomRange((LogoutIn-3)*60000, (LogoutIn+3)*60000);
+  MarkTime(Players[CurrentPlayer].Integers[ATTACKTIME]);
+end;
+
+procedure EndOfScript;
+begin
+  FreeSRL;
+  if LogToFile then
+    CloseFile(DebugFile);
+  writeln('');
+  writeln('Thanks for using Fast Fighter!');
+  writeln('Please post proggies on forums!');
+  writeln(' -Narcle');
+end;
+
+Procedure FFStartUp;
+var
+  i, ii, c: integer;
+  ScriptStart: string;
+begin
+  Smart_Server := 1;
+  Smart_Members:= true;
+  Smart_Signed := true;
+  SetupSRL;
+  DebugModeOn := True;
+  MouseSpeed := 16+random(3);
+  ScriptStart := TheDate(DATE_DAY) + ' at ' + TheTime;
+  ScriptStart := Replace(scriptStart, ':', ' ');
+  Writeln('');
+  Writeln(ScriptName+' v'+version);
+  Writeln('  By Narcle');
+  Writeln('');
+  NumberOfPlayers(100);
+  DeclarePlayers;
+  if (Players[0].Name = '') then
+  begin
+    SafeInitForm;
+    if AKpf_SavePlayers then
+      SavePlayers(True);
+    if AKpf_Terminate then
+      TerminateScript;
+  end else
+  begin
+    HowManyPlayers := 0;
+    CurrentPlayer := 0;
+    DeclarePlayers;
+    for i := 0 to High(Players) do
+    if (Players[i].Name <> '') then
+      Inc(HowManyPlayers)
+    else
+      Break;
+    NumberOfPlayers(HowManyPlayers);
+  end;
+
+  if LogToFile then
+    DebugFile := CreateFile(AppPath+'Scripts\'+ScriptName+' Log ' + ScriptStart + '.txt');
+
+  AddOnTerminate('EndOfScript');
+  SetupSRLStats(19, stats_Username, stats_Userpass);
+
+  SRL_Procs[srl_OnLogIn] := @SetupPlayer;
+  SRL_Procs[srl_OnLogOut] := @Report;
+  for i := 0 to HowManyPlayers - 1 do
+  begin
+    if Players[i].Nick = '' then
+      Players[i].Nick := Capitalize(Copy(Players[i].Name, 1, 4));
+    try
+      if (Length(Players[i].Arrays[0]) <> 3) then
+        Debug('[ERROR] '+Capitalize(Players[i].Name)+' settings array is wrong length');
+    except
+      Debug('[ERROR] '+Capitalize(Players[i].Name)+' settings array is wrong length - '+ExceptionToString(ExceptionType, ExceptionParam));
+    end;
+    Try
+      NAF[i].NPCTol := Players[i].Arrays[0][0];
+    except
+      Debug('[ERROR] '+Capitalize(Players[i].Name)+' NPCTol setting is incorrect - '+ExceptionToString(ExceptionType, ExceptionParam));
+    end;
+    try
+      NAF[i].Colors := [Players[i].Integers[0], Players[i].Integers[1], Players[i].Integers[2]];
+    except
+      Debug('[ERROR] '+Capitalize(Players[i].Name)+' color array is incorrect - '+ExceptionToString(ExceptionType, ExceptionParam));
+    end;
+    if trim(Players[i].Strings[0]) = '' then
+    begin
+      NAF[i].MobName := 'tack';
+      Writeln('[WARNING] '+Capitalize(Players[i].Name)+' has no NPC name given to attack.');
+    end
+    else
+      NAF[i].MobName := Players[CurrentPlayer].Strings[0];
+    If (i > 0) and (Players[i].Integers[0] = 0) then
+    begin
+      NAF[i].Colors := NAF[0].Colors;
+      NAF[i].MobName := NAF[0].MobName;
+    end;
+    c := 0;
+    for ii := 0 to 2 do
+     if (NAF[i].Colors[ii] <> 0) then
+       inc(c);
+    if (c = 0) then
+    begin
+      Writeln('[ERROR] '+Capitalize(Players[i].Name)+' has no colors entered.');
+      Writeln('[HELP] If you don''t know how to get colors please read this tutorial:');
+      Writeln('[HELP] http://villavu.com/forum/showthread.php?t=67793');
+      TerminateScript;
+    end;
+    if c < 3 then
+      Writeln('[WARNING] '+Capitalize(Players[i].Name)+' only has '+ToStr(c)+' color(s) entered.');
+    try
+      NAF[i].Clicktype := 0;
+      if (Players[i].Arrays[0][1]) and (Players[i].Arrays[0][2]) then
+      begin
+        Debug('[WARNING] '+Capitalize(Players[i].Name)+' can''t have both Right & Left clicks. Setting to Default.');
+        Continue;
+      end;
+      if Players[i].Arrays[0][1] then
+        NAF[i].Clicktype := 1;//Left
+      if Players[i].Arrays[0][2] then
+        NAF[i].Clicktype := 2;//Right
+    except
+      Debug(Capitalize(Players[i].Name)+' click array is incorrect - '+ExceptionToString(ExceptionType, ExceptionParam));
+    end;
+  end;
+
+  PlayerBox := IntToBox(240, 137, 278, 185);
+  AniBox1 := IntToBox(MSCX-10, MSCY-10, MSCX+10, MSCY+10);
+  AniBox2 := IntToBox(MSCX-10, MFBox.y2-4, MSCX+10, MFBox.y2+16);
+  DebugModeOn := DebugMode;
+  ReportTime := GetSystemTime + 5*61000;
+  Loginplayer;
+end;
+
+
+//============================Main Execution==================================\\
+begin
+  FFStartUp;
+  repeat
+    if not LoggedIn then
+      LogoutSeq('');
+
+    if FightIt then
+      WaitFight;
+
+    if (Length(GetMMDotsOnMS('npc')) = 0) then
+     if not ChangeCamera then
+      SitAndWait;
+
+    if (Getsystemtime > Players[CurrentPlayer].Integers[LOGOUTIME]) then
+      LogoutSeq('');
+
+    if TimeFromMark(Players[CurrentPlayer].Integers[ATTACKTIME]) > 10*60000 then
+      LogoutSeq('Failed to attack after 10 minutes');//Major fail safe, I suggest leaving it
+
+    if (GetSystemTime > ReportTime) then
+      Report;
+
+    SMARTDrawDisplay;
+    HpCheck;
+    Antiban;//delete for no antiban call
+    FindNormalRandoms;
+  until(false);
+end.
