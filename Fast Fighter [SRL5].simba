@@ -22,13 +22,13 @@
 |                                                                              |
 |                                                                              |
 |______________________________________________________________________________}
-{$i SRL/SRL/misc/smart.scar}
-{$i SRL/SRL.scar}
-{$i SRL/SRL/skill/fighting.scar}
-{$i SRL/SRL/skill/ranging.scar}
-{$i SRL/SRL/misc/Reports.scar}
-{$i SRL/SRL/misc/stats.simba}
-{$i srl/srl/misc/paintsmart.scar}
+{$i SRL/SRL/misc/smart.simba}
+{$i SRL/SRL.simba}
+{$i SRL/SRL/skill/fighting.simba}
+{$i SRL/SRL/skill/ranging.simba}
+{$i SRL/SRL/skill/magic.simba}
+{$i SRL/SRL/misc/Reports.simba}
+{$i srl/srl/misc/paintsmart.simba}
 {------------------------------------------------------------------------------}
 {===============================Player Setup===================================}
 {------------------------------------------------------------------------------}
@@ -81,15 +81,16 @@ Type
   FUsers = Record
     Range, Melee, Setup, OutOfFood, TPAFight: Boolean;
     MobName: string;
-    NPCTol, Clicktype: integer;
-    Colors: array of integer;
+    NPCTol, Clicktype, AvgWeapTime, AvgAniChange, MaxAniTime, InvAmt, LastWeaptime: integer;
+    Colors, WeaponTimes, AniTimes, AniChanges: TIntegerArray;
     Weapon: array of TStringArray;
   end;
 
 Const
-  Version    = '4.02';
+  Version    = '4.10';
   ScriptName = 'Fast Fighter';
-  WeaponTime = 2750;//If weapon is faster lower it. (min 1200)
+  WeaponTime = 4000;
+  PLAYERSET = 3;
   TOTALNPCKILLS = 10;
   FOODATE = 11;
   NPCKILLS = 12;
@@ -97,19 +98,19 @@ Const
   XPGained = 14;
   XPperHour = 15;
   REPORTXP = 16;
-  SESSIONXP = 17;
+  CURRENTXP = 17;
   LOGOUTIME = 19;
   ATTACKTIME = 20;
   STARTXP  = 21;
 
 var
-  NAF: array [0..99] of FUsers;
+  Playas: array [0..99] of FUsers;
   TOTALKILLS, TOTALXP: integer;//Counters
   LeftClickFail: boolean;
   DebugFile: integer;
   DebugModeOn: Boolean;
   ReportTime: integer;
-  PlayerBox, AniBox1, AniBox2: TBox;
+  PlayerBox, AniBox: TBox;
 
 const
   FilePath = AppPath + 'FastFighter4Chars.ini';
@@ -521,7 +522,7 @@ begin
     0: wait(500+random(3000));
     1: begin
          RandomMovement;
-         SetAngle(true);
+         SetAngle(SRL_ANGLE_HIGH);
        end;
     3: PickUpMouse;
   end;
@@ -591,7 +592,7 @@ begin
         if not LoggedIn then
           Exit;
       until (HPPercent > 60);
-      SetAngle(true);
+      SetAngle(SRL_ANGLE_HIGH);
     end;
   end;
 end;
@@ -611,12 +612,11 @@ begin
     for i := 0 to 3 do
       xp := Max(xp, GetXPBarTotal);
     if (xp > Integers[REPORTXP]) then
-    begin
-      stats_IncVariable('Total EXP Gained', xp-Integers[REPORTXP]);
-      IncEx(Integers[XPGained], xp-Integers[REPORTXP]);
-      IncEx(TOTALXP, xp-Integers[REPORTXP]);
-      Integers[REPORTXP] := XP;
-    end;
+      Integers[CURRENTXP] := xp;
+    stats_IncVariable('Total EXP Gained', Integers[CURRENTXP]-Integers[REPORTXP]);
+    IncEx(Integers[XPGained], Integers[CURRENTXP]-Integers[REPORTXP]);
+    IncEx(TOTALXP, Integers[CURRENTXP]-Integers[REPORTXP]);
+    Integers[REPORTXP] := Integers[CURRENTXP];
 
     if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
       Integers[KILLSperHour] := round( (Integers[TOTALNPCKILLS]*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
@@ -712,59 +712,160 @@ end;
 
 procedure WaitFight;
 Var
-  T, C, s, x, y, i: integer;
+  T, C, s, x, i, Time, L, Remove, H, Pixs, LastXP: integer;
   P: TIntegerArray;
+  WeapTime, TimeOut: integer;
 begin
-  Debug('Waiting for Fight...');
   //if DebugMode then
-  begin
-    //SMART_DrawBoxEx(False, AniBox1, clBlue);
-    SMART_DrawBoxEx(False, AniBox2, clPurple);
+    SMART_DrawBoxEx(False, AniBox, clPurple);
+
+  if Length(Playas[CurrentPlayer].WeaponTimes) > 49 then
+    Playas[CurrentPlayer].AvgWeapTime := AverageTIA(Playas[CurrentPlayer].WeaponTimes);
+  if Length(Playas[CurrentPlayer].AniChanges) > 199 then
+  Begin
+    Playas[CurrentPlayer].AvgAniChange := AverageTIA(Playas[CurrentPlayer].AniChanges);
+    //Debug('Pixs changed to: '+ToStr(Playas[CurrentPlayer].AvgAniChange));
   end;
+
+  if Length(Playas[CurrentPlayer].AniTimes) > 49 then
+    Playas[CurrentPlayer].MaxAniTime := MaxA(Playas[CurrentPlayer].AniTimes);
+
+  with Playas[CurrentPlayer] do
+  if AvgWeapTime > 0 then
+  begin
+    H := High(WeaponTimes);
+    for i := 0 to H do
+    if not InRange(WeaponTimes[i], AvgWeapTime-300, AvgWeapTime+300) then
+    begin
+      Swap(WeaponTimes[i], WeaponTimes[H-Remove]);
+      Inc(Remove);
+    end;
+    SetLength(WeaponTimes, Length(WeaponTimes)-Remove);
+    AvgWeapTime := AverageTIA(Playas[CurrentPlayer].WeaponTimes);
+    if (MaxAniTime > 0) then
+      if not InRange(MaxAniTime, AvgWeapTime-999, AvgWeapTime-300) then
+        WeapTime := MaxAniTime
+      else
+        WeapTime := (AvgWeapTime+MaxAniTime)/2
+    else
+      WeapTime := AvgWeapTime;
+
+    if (MaxAniTime > AvgWeapTime) then
+      WeapTime := AvgWeapTime;
+    if LastWeaptime <> WeapTime then
+      Writeln('Weapon time switched too: '+ToStr(WeapTime)+' AvgWeapTime: '+ToStr(AvgWeapTime)+' MaxAniTime: '+ToStr(MaxAniTime));
+    LastWeaptime := WeapTime;
+  end;
+
+  if (WeapTime = 0) then
+    WeapTime := WeaponTime;
+
+
   for i := 0 to 2 do
-    s := Max(s, GetXPBarTotal);
-  y := s;
+    With Players[CurrentPlayer] do
+      Integers[CURRENTXP] := Max(Integers[CURRENTXP], GetXPBarTotal);
+  s := Players[CurrentPlayer].Integers[CURRENTXP];
+  x := s;
   C := GetSystemTime;
-  T := Getsystemtime + 5000+Random(1000);
+  T := C;
+  TimeOut := C + 8000+random(3000);
   Repeat
-    P := PixelShiftMulti([AniBox1, AniBox2], 100);
-    if (P[1] > 190) or (GetSystemTime > T) then
-      Break;
-  until not LoggedIn;
-  if (GetSystemTime > T) or not LoggedIn then
-    Exit;
-  Debug('Killing monster...');
-  T := GetSystemTime + WeaponTime;
-  Repeat
-    P := PixelShiftMulti([AniBox1, AniBox2], 100);
-    if (P[1] > 190) or HpCheck then
+    P := PixelShiftMulti([AniBox], 100);
+
+    if Playas[CurrentPlayer].AvgAniChange > 0 then
+      Pixs := Playas[CurrentPlayer].AvgAniChange-20
+    else
+      Pixs := 250;
+
+    if (P[0] > Pixs) then
     begin
-      Debugln('Ani Time: '+Padl(ToStr(GetSystemTime-(T-WeaponTime)), 5)+' Ani Change: '+ToStr(P[0])+' + '+ToStr(P[1])+' = '+ToStr(P[0]+P[1]));
-      T := GetSystemTime + WeaponTime;
+      //Debugln('Ani Time: '+Padl(ToStr(GetSystemTime-(T-WeapTime)), 5)+' Ani Change: '+ToStr(P[0]));
+      if (Playas[CurrentPlayer].AvgAniChange < 1) then
+      begin
+        L := Length(Playas[CurrentPlayer].AniChanges);
+        SetArrayLength(Playas[CurrentPlayer].AniChanges, L+1);
+        Playas[CurrentPlayer].AniChanges[L] := P[0];
+      end else
+      begin
+        L := Length(Playas[CurrentPlayer].AniTimes);
+        SetArrayLength(Playas[CurrentPlayer].AniTimes, L+1);
+        Playas[CurrentPlayer].AniTimes[L] := GetSystemTime-T;
+      end;
+      T := GetSystemTime;
+      TimeOut := T + WeapTime;
     end;
-    FindNormalRandoms;
-    x := GetXPBarTotal;
-    if (x > y) then
+
+    With Players[CurrentPlayer] do
+      Integers[CURRENTXP] := Max(Integers[CURRENTXP], GetXPBarTotal);
+
+    if (Players[CurrentPlayer].Integers[CURRENTXP] > x) then
     begin
-      Debugln('Att speed: '+Tostr(GetSystemTime - C));
+      LastXP := Players[CurrentPlayer].Integers[CURRENTXP] - x;
+      Time := GetSystemTime - C;
+      x := Players[CurrentPlayer].Integers[CURRENTXP];
+      if InRange(Time, 1000, 5000) then
+      begin
+        L := Length(Playas[CurrentPlayer].WeaponTimes);
+        SetArrayLength(Playas[CurrentPlayer].WeaponTimes, L+1);
+        Playas[CurrentPlayer].WeaponTimes[L] := Time;
+      end;
       C := GetSystemTime;
-      y := x;
+      Debugln('| Hit~ '+ToStr(Round(LastXP*1.9))+' Speed: '+Tostr(Time));
     end;
-  until (GetSystemTime > T) or (not LoggedIn)
-  Debugln('Ani Time: '+Padl(ToStr(GetSystemTime-(T-WeaponTime)), 5));
+
+    FindNormalRandoms;
+    if HpCheck then
+      TimeOut := GetSystemTime + 4000;
+  until (GetSystemTime > TimeOut) or (not LoggedIn);
+  Debugln('Ani Time: '+Padl(ToStr(GetSystemTime-T), 5));
   Debug('Fighting Done.');
-  if ((x-s) > 12) then
+  if ((Players[CurrentPlayer].Integers[CURRENTXP]-s) > 12) then
   begin
     Inc(Players[CurrentPlayer].Integers[TOTALNPCKILLS]);
     Inc(Players[CurrentPlayer].Integers[NPCKILLS]);
   end;
 end;
 
+
+Procedure SMARTDrawDisplay;
+var
+  SArr: TStringArray;
+  xp, i: integer;
+begin
+  With Players[CurrentPlayer] do
+  begin
+    xp := Max(GetXPBarTotal, Integers[CURRENTXP]);
+    if (xp > Integers[CURRENTXP]) then
+      Integers[CURRENTXP] := xp;
+    xp := (xp-Integers[STARTXP]);
+
+    if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
+      Integers[KILLSperHour] := round( (Integers[TOTALNPCKILLS]*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
+    else
+      Integers[KILLSperHour] := -1;
+
+    if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
+      Integers[XPperHour] := round( (xp*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
+    else
+      Integers[XPperHour] := -1;
+
+    SArr := [ ' Kills: '+ToStr(Integers[TOTALNPCKILLS]),
+              '  K/H: '+ToStr(Integers[KILLSperHour]),
+              '    XP: '+ToStr(XP),
+              'XP/H: '+ToStr(Integers[XPperHour])];
+
+  end;
+
+  for i := 0 to High(SArr) do
+    SMART_DrawTextEx((i < 1), 8, 290+11*i, StatChars, SArr[i], clYellow);
+end;
+
 Function FightIt: Boolean;
 var
   i, ii, r, L, P: integer;
   T: TPoint;
-  NPCs: TPointArray;
+  NPCs, TPA: TPointArray;
+  ATPA: T2DPointArray;
   BoxArr: TBoxArray;
 begin
   P := GetSystemTime;
@@ -779,20 +880,27 @@ begin
     BoxArr[i] := IntToBox(Max(T.x-40, MSX1), Max(T.y-40, MSY1), Min(T.x+40, MSX2), Min(T.y+40, MSY2));
   end;
 
-  With NAF[CurrentPlayer] do
-  For ii := 0 to High(Colors) do //Color array
+  With Playas[CurrentPlayer] do
     for i := 0 to L-1 do
     with BoxArr[i] do
     begin
-      T := MiddleBox(BoxArr[i]);
-      if FindColorSpiralTolerance(T.x, T.y, NAF[CurrentPlayer].Colors[ii], X1, Y1, X2, Y2, NAF[CurrentPlayer].NPCTol) then
+      SetLength(ATPA, Length(Colors));
+      For ii := 0 to High(Colors) do //Color array
+        FindColorsTolerance(ATPA[ii], Colors[ii], X1, Y1, X2, Y2, NPCTol);
+      TPA := MergeATPA(ATPA);
+      if Length(TPA) > 0 then
       begin
-        if PointInBox(T, PlayerBox) or IsFightAt(T.x, T.y) then
+        ATPA := SplitTPA(TPA, 6);
+        SortATPASize(ATPA, True);
+        T := MiddleTPA(ATPA[0]);
+        if IsFightAt(T.x, T.y) then
           Continue;
 
-        SMART_DrawBoxEx(False, BoxArr[i], clRed);
+        SMARTDrawDisplay;
+        SMART_DrawBoxEx(False, BoxArr[i], clBlue);
+        SMART_DrawDotsEx(False, ATPA[0], clRed);
         MMouse(T.x, T.y, 3, 3);
-        if WaitUpTextMulti([NAF[CurrentPlayer].MobName], 150+random(100)) then//Text array
+        if WaitUpTextMulti([MobName], 150+random(100)) then//Text array
         begin
           Case ClickType of
             0: r := Random(3);
@@ -825,40 +933,6 @@ begin
     end;
 end;
 
-Procedure SMARTDrawDisplay;
-var
-  SArr: TStringArray;
-  xp, i: integer;
-begin
-  With Players[CurrentPlayer] do
-  begin
-    xp := GetXPBarTotal;
-    if (xp > Integers[STARTXP]) then
-      xp := (xp-Integers[STARTXP])
-    else
-      Exit;
-
-    if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
-      Integers[KILLSperHour] := round( (Integers[TOTALNPCKILLS]*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
-    else
-      Integers[KILLSperHour] := -1;
-
-    if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
-      Integers[XPperHour] := round( (xp*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
-    else
-      Integers[XPperHour] := -1;
-
-    SArr := [ ' Kills: '+ToStr(Integers[TOTALNPCKILLS]),
-              '  K/H: '+ToStr(Integers[KILLSperHour]),
-              '    XP: '+ToStr(XP),
-              'XP/H: '+ToStr(Integers[XPperHour])];
-
-  end;
-
-  for i := 0 to High(SArr) do
-    SMART_DrawTextEx((i < 1), 8, 290+11*i, StatChars, SArr[i], clYellow);
-end;
-
 procedure SetupPlayer;
 var
   ammo, i: integer;
@@ -868,37 +942,40 @@ begin
   MouseSpeed := RandomRange(15, 17);
 
   ToggleXPBar(True);
-  for i := 0 to 3 do//4x check
-    Players[CurrentPlayer].Integers[SESSIONXP] := Max(GetXPBarTotal, Players[CurrentPlayer].Integers[SESSIONXP]);
-  Players[CurrentPlayer].Integers[REPORTXP] := Players[CurrentPlayer].Integers[SESSIONXP];
-  if not NAF[CurrentPlayer].Setup then
-  begin
-    Players[CurrentPlayer].Integers[STARTXP] := Players[CurrentPlayer].Integers[SESSIONXP];
-    Debug('Setting Angle');
-    SetAngle(true);
-    SetAngle(true);//just in case of lag
-    Debug('Setting Retaliate');
-    Retaliate(True);
-    Debug('Getting Weapon Info');
 
-    GetWeaponData(NAF[CurrentPlayer].Weapon);
-    if (Players[CurrentPlayer].Strings[1] <> '') then
-      if SetWeaponMode(Players[CurrentPlayer].Strings[1], NAF[CurrentPlayer].Weapon, True) then
-        Debug('Weapon set');
-    NAF[CurrentPlayer].Range := SetWeaponMode('ange', NAF[CurrentPlayer].Weapon, false);
-    NAF[CurrentPlayer].Melee := SetWeaponMode('ttack', NAF[CurrentPlayer].Weapon, false);
-    Debug('Getting Levels');
-    GetAllLevels;
-    If NAF[CurrentPlayer].Range then
-      Writeln(Capitalize(Players[CurrentPlayer].Name)+ ' is Ranging.');
-    if NAF[CurrentPlayer].Melee then
-      Writeln(Capitalize(Players[CurrentPlayer].Name)+ ' is Meleeing.');
-    if not (NAF[CurrentPlayer].Range or NAF[CurrentPlayer].Melee) then
-      Writeln('[WARNING] Failed to get weapon data. Can''t detect if ranging or meleeing.');
-    NAF[CurrentPlayer].Setup := true;
+  with Players[CurrentPlayer] do
+  begin
+    if not Booleans[PLAYERSET] then
+    begin
+      Debug('Setting Angle');
+      SetAngle(SRL_ANGLE_HIGH);
+      SetAngle(SRL_ANGLE_HIGH);//just in case of lag
+      Debug('Setting Retaliate');
+      Retaliate(True);
+      Debug('Getting Weapon Info');
+      GetWeaponData(Playas[CurrentPlayer].Weapon);
+      if (Players[CurrentPlayer].Strings[1] <> '') then
+        if SetWeaponMode(Players[CurrentPlayer].Strings[1], Playas[CurrentPlayer].Weapon, True) then
+          Debug('Weapon set');
+      Playas[CurrentPlayer].Range := SetWeaponMode('ange', Playas[CurrentPlayer].Weapon, false);
+      Playas[CurrentPlayer].Melee := SetWeaponMode('ttack', Playas[CurrentPlayer].Weapon, false);
+      Debug('Getting Levels');
+      GetAllLevels;
+      If Playas[CurrentPlayer].Range then
+        Writeln(Capitalize(Players[CurrentPlayer].Name)+ ' is Ranging.');
+      if Playas[CurrentPlayer].Melee then
+        Writeln(Capitalize(Players[CurrentPlayer].Name)+ ' is Meleeing.');
+      if not (Playas[CurrentPlayer].Range or Playas[CurrentPlayer].Melee) then
+        Writeln('[WARNING] Failed to get weapon data. Can''t detect if ranging or meleeing.');
+      for i := 0 to 9 do
+        Integers[STARTXP] := Max(GetXPBarTotal, Integers[STARTXP]);
+      Integers[CURRENTXP] := Integers[STARTXP];
+      Integers[REPORTXP] := Integers[STARTXP];
+      Booleans[PLAYERSET] := true;
+    end;
   end;
 
-  if NAF[CurrentPlayer].Range then
+  if Playas[CurrentPlayer].Range then
   begin
     GameTab(tab_Equip);
     ammo := ArrowAmount;
@@ -918,6 +995,7 @@ begin
   FreeSRL;
   if LogToFile then
     CloseFile(DebugFile);
+  Disguise('ENDED');
   writeln('');
   writeln('Thanks for using Fast Fighter!');
   writeln('Please post proggies on forums!');
@@ -935,6 +1013,7 @@ begin
   SetupSRL;
   DebugModeOn := True;
   MouseSpeed := 16+random(3);
+  Disguise(scriptname);
   ScriptStart := TheDate(DATE_DAY) + ' at ' + TheTime;
   ScriptStart := Replace(scriptStart, ':', ' ');
   Writeln('');
@@ -982,30 +1061,30 @@ begin
       Debug('[ERROR] '+Capitalize(Players[i].Name)+' settings array is wrong length - '+ExceptionToString(ExceptionType, ExceptionParam));
     end;
     Try
-      NAF[i].NPCTol := Players[i].Arrays[0][0];
+      Playas[i].NPCTol := Players[i].Arrays[0][0];
     except
       Debug('[ERROR] '+Capitalize(Players[i].Name)+' NPCTol setting is incorrect - '+ExceptionToString(ExceptionType, ExceptionParam));
     end;
     try
-      NAF[i].Colors := [Players[i].Integers[0], Players[i].Integers[1], Players[i].Integers[2]];
+      Playas[i].Colors := [Players[i].Integers[0], Players[i].Integers[1], Players[i].Integers[2]];
     except
       Debug('[ERROR] '+Capitalize(Players[i].Name)+' color array is incorrect - '+ExceptionToString(ExceptionType, ExceptionParam));
     end;
     if trim(Players[i].Strings[0]) = '' then
     begin
-      NAF[i].MobName := 'tack';
+      Playas[i].MobName := 'tack';
       Writeln('[WARNING] '+Capitalize(Players[i].Name)+' has no NPC name given to attack.');
     end
     else
-      NAF[i].MobName := Players[CurrentPlayer].Strings[0];
+      Playas[i].MobName := Players[CurrentPlayer].Strings[0];
     If (i > 0) and (Players[i].Integers[0] = 0) then
     begin
-      NAF[i].Colors := NAF[0].Colors;
-      NAF[i].MobName := NAF[0].MobName;
+      Playas[i].Colors := Playas[0].Colors;
+      Playas[i].MobName := Playas[0].MobName;
     end;
     c := 0;
     for ii := 0 to 2 do
-     if (NAF[i].Colors[ii] <> 0) then
+     if (Playas[i].Colors[ii] <> 0) then
        inc(c);
     if (c = 0) then
     begin
@@ -1017,24 +1096,23 @@ begin
     if c < 3 then
       Writeln('[WARNING] '+Capitalize(Players[i].Name)+' only has '+ToStr(c)+' color(s) entered.');
     try
-      NAF[i].Clicktype := 0;
+      Playas[i].Clicktype := 0;
       if (Players[i].Arrays[0][1]) and (Players[i].Arrays[0][2]) then
       begin
         Debug('[WARNING] '+Capitalize(Players[i].Name)+' can''t have both Right & Left clicks. Setting to Default.');
         Continue;
       end;
       if Players[i].Arrays[0][1] then
-        NAF[i].Clicktype := 1;//Left
+        Playas[i].Clicktype := 1;//Left
       if Players[i].Arrays[0][2] then
-        NAF[i].Clicktype := 2;//Right
+        Playas[i].Clicktype := 2;//Right
     except
       Debug(Capitalize(Players[i].Name)+' click array is incorrect - '+ExceptionToString(ExceptionType, ExceptionParam));
     end;
   end;
 
   PlayerBox := IntToBox(240, 137, 278, 185);
-  AniBox1 := IntToBox(MSCX-10, MSCY-10, MSCX+10, MSCY+10);
-  AniBox2 := IntToBox(MSCX-10, MFBox.y2-4, MSCX+10, MFBox.y2+16);
+  AniBox := IntToBox(MSCX-10, MFBox.y2-4, MSCX+10, MFBox.y2+16);
   DebugModeOn := DebugMode;
   ReportTime := GetSystemTime + 5*61000;
   Loginplayer;
@@ -1068,5 +1146,5 @@ begin
     HpCheck;
     Antiban;//delete for no antiban call
     FindNormalRandoms;
-  until(false);
+  until (AllPlayersInactive);
 end.
