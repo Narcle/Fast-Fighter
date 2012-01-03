@@ -102,6 +102,7 @@ Const
   LOGOUTIME = 19;
   ATTACKTIME = 20;
   STARTXP  = 21;
+  DRAWXP = 22;
 
 var
   Playas: array [0..99] of FUsers;
@@ -601,6 +602,7 @@ procedure Report;
 var
   xp,i: integer;
 begin
+
   if not LoggedIn then
     Exit;
 
@@ -723,37 +725,26 @@ begin
     Playas[CurrentPlayer].AvgWeapTime := AverageTIA(Playas[CurrentPlayer].WeaponTimes);
   if Length(Playas[CurrentPlayer].AniChanges) > 199 then
   Begin
-    Playas[CurrentPlayer].AvgAniChange := AverageTIA(Playas[CurrentPlayer].AniChanges);
-    //Debug('Pixs changed to: '+ToStr(Playas[CurrentPlayer].AvgAniChange));
+    Playas[CurrentPlayer].AvgAniChange := Round(AverageTIA(Playas[CurrentPlayer].AniChanges)*0.9);
+    Debug('Pixs changed to: '+ToStr(Playas[CurrentPlayer].AvgAniChange));
   end;
-
-  if Length(Playas[CurrentPlayer].AniTimes) > 49 then
-    Playas[CurrentPlayer].MaxAniTime := MaxA(Playas[CurrentPlayer].AniTimes);
 
   with Playas[CurrentPlayer] do
   if AvgWeapTime > 0 then
   begin
     H := High(WeaponTimes);
     for i := 0 to H do
-    if not InRange(WeaponTimes[i], AvgWeapTime-300, AvgWeapTime+300) then
+    if not InRange(WeaponTimes[i], AvgWeapTime-400, AvgWeapTime+400) then
     begin
       Swap(WeaponTimes[i], WeaponTimes[H-Remove]);
       Inc(Remove);
     end;
     SetLength(WeaponTimes, Length(WeaponTimes)-Remove);
     AvgWeapTime := AverageTIA(Playas[CurrentPlayer].WeaponTimes);
-    if (MaxAniTime > 0) then
-      if not InRange(MaxAniTime, AvgWeapTime-999, AvgWeapTime-300) then
-        WeapTime := MaxAniTime
-      else
-        WeapTime := (AvgWeapTime+MaxAniTime)/2
-    else
-      WeapTime := AvgWeapTime;
 
-    if (MaxAniTime > AvgWeapTime) then
-      WeapTime := AvgWeapTime;
+    WeapTime := Round(AvgWeapTime+0.0*1.15);
     if LastWeaptime <> WeapTime then
-      Writeln('Weapon time switched too: '+ToStr(WeapTime)+' AvgWeapTime: '+ToStr(AvgWeapTime)+' MaxAniTime: '+ToStr(MaxAniTime));
+      Debug('Weapon time switched too: '+ToStr(WeapTime));
     LastWeaptime := WeapTime;
   end;
 
@@ -770,7 +761,7 @@ begin
   T := C;
   TimeOut := C + 8000+random(3000);
   Repeat
-    P := PixelShiftMulti([AniBox], 100);
+    P := PixelShiftMulti([AniBox], 200);
 
     if Playas[CurrentPlayer].AvgAniChange > 0 then
       Pixs := Playas[CurrentPlayer].AvgAniChange-20
@@ -780,16 +771,12 @@ begin
     if (P[0] > Pixs) then
     begin
       //Debugln('Ani Time: '+Padl(ToStr(GetSystemTime-(T-WeapTime)), 5)+' Ani Change: '+ToStr(P[0]));
+      Time := GetSystemTime-T;
       if (Playas[CurrentPlayer].AvgAniChange < 1) then
       begin
         L := Length(Playas[CurrentPlayer].AniChanges);
         SetArrayLength(Playas[CurrentPlayer].AniChanges, L+1);
         Playas[CurrentPlayer].AniChanges[L] := P[0];
-      end else
-      begin
-        L := Length(Playas[CurrentPlayer].AniTimes);
-        SetArrayLength(Playas[CurrentPlayer].AniTimes, L+1);
-        Playas[CurrentPlayer].AniTimes[L] := GetSystemTime-T;
       end;
       T := GetSystemTime;
       TimeOut := T + WeapTime;
@@ -826,18 +813,52 @@ begin
   end;
 end;
 
+Procedure SetupBackGround;
+var
+  TPA: TPointArray;
+  B: TBox;
+begin
+  B := IntToBox(8, 345, 497, 379);
+  TPA := TPAFromBox(B);
+  SMART_DrawDotsEx(True, TPA, 725267);
+  B := IntToBox(8, 378, 497, 378);
+  TPA := TPAFromBox(B);
+  SMART_DrawDotsEx(false, TPA, 2570567);
+  //SMART_DrawTextEx(False, 378, 346, UpChars, ScriptName, 2570567);
+  SMART_DrawTextEx(False, 344, 345, BigChars, 'by Narcle', 2570567);
+  SMART_DrawTextEx(False, 282, 345, UpCharsEx, ' Fast', 2570567);
+  SMART_DrawTextEx(False, 280, 344+17, UpCharsEx, 'Fighter', 2570567);
+  SMART_DrawTextEx(False, 9, 347, UpChars, ' Kills: ', clYellow);
+  SMART_DrawTextEx(False, 154, 347, UpChars, '  K/H: ', clYellow);
+  SMART_DrawTextEx(False, 8, 347+17, UpChars, '    XP: ', clYellow);
+  SMART_DrawTextEx(False, 153, 347+17, UpChars, 'XP/H: ', clYellow);
+end;
+
+procedure PrintOnSmart(Str: String; Placement: TPoint);   //y1 345, y2 377
+var
+ TPA: TPointArray;
+ B: TBox;
+begin
+  B := IntToBox(Placement.x, Placement.y, Placement.x+Length(Str)*8 , Placement.y+15);
+  TPA := TPAFromBox(B);
+  SMART_DrawDotsEx(False, TPA, 725267);
+  SMART_DrawTextEx(False, Placement.x, Placement.y, UpChars, Str, clYellow);
+end;
 
 Procedure SMARTDrawDisplay;
 var
-  SArr: TStringArray;
-  xp, i: integer;
+  xp, x: integer;
 begin
+  ClearCanvas(SMART_Canvas.canvas, MSX2, MSY2);
   With Players[CurrentPlayer] do
   begin
-    xp := Max(GetXPBarTotal, Integers[CURRENTXP]);
-    if (xp > Integers[CURRENTXP]) then
-      Integers[CURRENTXP] := xp;
-    xp := (xp-Integers[STARTXP]);
+    x := GetXPBarTotal;
+    if InRange(x, Integers[CURRENTXP], Integers[CURRENTXP]+1000) then
+      Integers[CURRENTXP] := x;
+
+    if Integers[DRAWXP] = Integers[CURRENTXP] then
+      Exit;
+    xp := (Integers[CURRENTXP]-Integers[STARTXP]);
 
     if ((PlayerWorked(CurrentPlayer)/60000.0) > 0) then
       Integers[KILLSperHour] := round( (Integers[TOTALNPCKILLS]*60.0)/(PlayerWorked(CurrentPlayer)/60000.0))//XP Per hour
@@ -849,15 +870,13 @@ begin
     else
       Integers[XPperHour] := -1;
 
-    SArr := [ ' Kills: '+ToStr(Integers[TOTALNPCKILLS]),
-              '  K/H: '+ToStr(Integers[KILLSperHour]),
-              '    XP: '+ToStr(XP),
-              'XP/H: '+ToStr(Integers[XPperHour])];
+    Integers[DRAWXP] := Integers[CURRENTXP];
 
+    PrintOnSmart(ToStr(Integers[TOTALNPCKILLS]), Point(40, 347));
+    PrintOnSmart(ToStr(Integers[KILLSperHour]), Point(188, 347));
+    PrintOnSmart(ToStr(XP), Point(40, 347+17));
+    PrintOnSmart(ToStr(Integers[XPperHour]), Point(188, 347+17));
   end;
-
-  for i := 0 to High(SArr) do
-    SMART_DrawTextEx((i < 1), 8, 290+11*i, StatChars, SArr[i], clYellow);
 end;
 
 Function FightIt: Boolean;
@@ -940,7 +959,7 @@ begin
   if not LoggedIn then
     Exit;
   MouseSpeed := RandomRange(15, 17);
-
+  SetupBackGround;
   ToggleXPBar(True);
 
   with Players[CurrentPlayer] do
