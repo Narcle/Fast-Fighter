@@ -33,7 +33,7 @@ Const
   LogoutIn     = 29;    //Logout every ?? Minutes; +/- 3 minutes for randomness
   LogToFile    = False; //File logging (helps me debug your problem) stores in /Scripts
   DebugMode    = False; //Debug mode
-  DisableSMARTPaint = False;//Might use less CPU if True
+  DisableSMARTPaint = true;//Might use less CPU if True
 
 
 {   ATTENTION!!!
@@ -1040,6 +1040,8 @@ begin
   Smart_Members:= true;
   Smart_Signed := true;
   SetupSRL;
+  if DisableSMARTPaint then
+    SmartSetDebug(False);
   DebugModeOn := True;
   MouseSpeed := 16+random(3);
   Disguise(scriptname);
