@@ -2,8 +2,6 @@
 | ScriptName   = Fast Fighter                                                  |
 | Author       = Narcle                                                        |
 | Description  = Fights any monster, food eating and HP regen.                 |
-| Version      = 4.01                                                          |
-| Date         = 12/25/2011                                                    |
 |==============================================================================|
 |                               Instructions                                   |
 |==============================================================================|
@@ -26,7 +24,6 @@
 {$i SRL/SRL.simba}
 {$i SRL/SRL/skill/fighting.simba}
 {$i SRL/SRL/skill/ranging.simba}
-{$i SRL/SRL/skill/magic.simba}
 {$i SRL/SRL/misc/Reports.simba}
 {$i srl/srl/misc/paintsmart.simba}
 {------------------------------------------------------------------------------}
@@ -36,6 +33,8 @@ Const
   LogoutIn     = 29;    //Logout every ?? Minutes; +/- 3 minutes for randomness
   LogToFile    = False; //File logging (helps me debug your problem) stores in /Scripts
   DebugMode    = False; //Debug mode
+  DisableSMARTPaint = False;//Might use less CPU if True
+
 
 {   ATTENTION!!!
   To use Forms just push play do NOT put anything in DeclarePlayers.
@@ -719,7 +718,7 @@ Var
   WeapTime, TimeOut: integer;
 begin
   //if DebugMode then
-    SMART_DrawBoxEx(False, AniBox, clPurple);
+    //SMART_DrawBoxEx(False, AniBox, clPurple);
 
   if Length(Playas[CurrentPlayer].WeaponTimes) > 49 then
     Playas[CurrentPlayer].AvgWeapTime := AverageTIA(Playas[CurrentPlayer].WeaponTimes);
@@ -818,6 +817,8 @@ var
   TPA: TPointArray;
   B: TBox;
 begin
+  if DisableSMARTPaint then
+    Exit;
   B := IntToBox(8, 345, 497, 379);
   TPA := TPAFromBox(B);
   SMART_DrawDotsEx(True, TPA, 725267);
@@ -849,6 +850,8 @@ Procedure SMARTDrawDisplay;
 var
   xp, x: integer;
 begin
+  if DisableSMARTPaint then
+    Exit;
   ClearCanvas(SMART_Canvas.canvas, MSX2, MSY2);
   With Players[CurrentPlayer] do
   begin
@@ -915,9 +918,12 @@ begin
         if IsFightAt(T.x, T.y) then
           Continue;
 
-        SMARTDrawDisplay;
-        SMART_DrawBoxEx(False, BoxArr[i], clBlue);
-        SMART_DrawDotsEx(False, ATPA[0], clRed);
+        if not DisableSMARTPaint then
+        begin
+          SMARTDrawDisplay;
+          SMART_DrawBoxEx(False, BoxArr[i], clBlue);
+          SMART_DrawDotsEx(False, ATPA[0], clRed);
+        end;
         MMouse(T.x, T.y, 3, 3);
         if WaitUpTextMulti([MobName], 150+random(100)) then//Text array
         begin
@@ -954,7 +960,7 @@ end;
 
 procedure SetupPlayer;
 var
-  ammo, i: integer;
+  ammo, i, N: integer;
 begin
   if not LoggedIn then
     Exit;
@@ -973,9 +979,13 @@ begin
       Retaliate(True);
       Debug('Getting Weapon Info');
       GetWeaponData(Playas[CurrentPlayer].Weapon);
+
       if (Players[CurrentPlayer].Strings[1] <> '') then
         if SetWeaponMode(Players[CurrentPlayer].Strings[1], Playas[CurrentPlayer].Weapon, True) then
           Debug('Weapon set');
+      N := StrToIntDef(Players[CurrentPlayer].Strings[1], 0);
+      if InRange(N, 1, 4) then
+        SetFightMode(N);
       Playas[CurrentPlayer].Range := SetWeaponMode('ange', Playas[CurrentPlayer].Weapon, false);
       Playas[CurrentPlayer].Melee := SetWeaponMode('ttack', Playas[CurrentPlayer].Weapon, false);
       Debug('Getting Levels');
