@@ -33,7 +33,7 @@ Const
   LogoutIn     = 29;    //Logout every ?? Minutes; +/- 3 minutes for randomness
   LogToFile    = False; //File logging (helps me debug your problem) stores in /Scripts
   DebugMode    = False; //Debug mode
-  DisableSMARTPaint = true;//Might use less CPU if True
+  DisableSMARTPaint = False;//Might use less CPU if True
 
 
 {   ATTENTION!!!
@@ -852,7 +852,7 @@ var
 begin
   if DisableSMARTPaint then
     Exit;
-  ClearCanvas(SMART_Canvas.canvas, MSX2, MSY2);
+  SMART_ClearCanvasArea(IntToBox(MSX1, MSY2, MSX2, MSY2));
   With Players[CurrentPlayer] do
   begin
     x := GetXPBarTotal;
