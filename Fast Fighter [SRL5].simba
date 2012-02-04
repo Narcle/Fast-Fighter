@@ -765,7 +765,7 @@ begin
     if Playas[CurrentPlayer].AvgAniChange > 0 then
       Pixs := Playas[CurrentPlayer].AvgAniChange-20
     else
-      Pixs := 250;
+      Pixs := 300;
 
     if (P[0] > Pixs) then
     begin
@@ -852,7 +852,7 @@ var
 begin
   if DisableSMARTPaint then
     Exit;
-  SMART_ClearCanvasArea(IntToBox(MSX1, MSY2, MSX2, MSY2));
+  SMART_ClearCanvasArea(IntToBox(0, 0, MSX2, MSY2));
   With Players[CurrentPlayer] do
   begin
     x := GetXPBarTotal;
